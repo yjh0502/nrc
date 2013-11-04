@@ -28,26 +28,31 @@ static int init_stream(z_stream *strm,
     return !strm->next_out;
 }
 
+
 static int zlib_loop(z_stream *strm, zlib_op op_func, char **buf, int *buflen) {
     char *out = (char *)strm->next_out;
     int outlen = strm->avail_out;
 
     int err, op = Z_NO_FLUSH;
     while((err = op_func(strm, op)) != Z_STREAM_END) {
-        if(err != Z_OK)
+        if(err != Z_OK) {
             goto err;
+        }
 
-        if(!strm->avail_in) {
-            op = Z_FINISH;
+        if(strm->avail_out == 0) {
+            if(!(out = (char *)realloc(out, outlen << 1)))
+                goto err;
+
+            strm->next_out = (Bytef*)(out + outlen);
+            strm->avail_out = outlen;
+            outlen <<= 1;
             continue;
         }
 
-        if(!(out = realloc(out, outlen << 1)))
-            goto err;
-
-        strm->next_out = (Bytef*)(out + outlen);
-        strm->avail_out = outlen;
-        outlen <<= 1;
+        if(strm->avail_in == 0) {
+            op = Z_FINISH;
+            continue;
+        }
     }
 
     *buf = out;
@@ -58,8 +63,9 @@ err:
     free(out);
     *buf = NULL;
     *buflen = 0;
-    return -1;
+    return err;
 }
+
 
 int inflate_data(const void *src, int srclen, char **dest_out, int *destlen_out) {
     z_stream strm = {0};

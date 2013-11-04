@@ -53,8 +53,6 @@ static int init_key(void) {
     return 0;
 }
 
-
-
 const char *SERVER_HOST = "1.214.91.26";
 const int SERVER_PORT = 11003;
 
