@@ -310,13 +310,18 @@ void dump_hex(const unsigned char *data, int len) {
 }
 
 
-// reutrn 1 if more data need to be read
-// return 0 if done
+// reutrns 1 if more data need to be read
+// returns 0 if done
+// returns -1 if error
 static int handle_read(nrc_t nrc) {
     int readlen = 0;
     if(nrc->nonce_len_read_len < 4) {
         unsigned char nonce_len[4];
         readlen = read(nrc->fd, nonce_len, 4);
+        if(readlen != 4) {
+            return -1;
+        }
+
         nrc->nonce_len_read_len = 4;
         dump_hex(nonce_len, 4);
     } else if(nrc->nonce_read_len < crypto_box_NONCEBYTES) {
@@ -441,22 +446,22 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
 
     int ev = 0;
     if(events & EV_READ) {
-        printf("Readable\n");
         ev = handle_read(nrc);
         if(ev < 0) {
-            printf("Error while reading: %d", errno);
-            exit(-1);
+            printf("Error while reading: %d\n", errno);
+            nrc_stop(nrc);
+            return;
         }
         nrc->status &= ~EV_READ;
         nrc->status |= ev;
     }
 
     if(events & EV_WRITE) {
-        printf("Writable\n");
         ev = handle_write(nrc);
         if(ev < 0) {
-            printf("Error while writing");
-            exit(-1);
+            printf("Error while writing: %d\n", errno);
+            nrc_stop(nrc);
+            return;
         }
 
         nrc->status &= ~EV_WRITE;
@@ -520,6 +525,22 @@ nrc_t nrc_new(const char *ip, int port,
     return nrc;
 }
 
+void nrc_stop(nrc_t nrc) {
+    if(nrc->loop) {
+        ev_break(nrc->loop, EVBREAK_ALL);
+    }
+
+    if(nrc->cur_req) {
+        nrc_req_delete(nrc->cur_req);
+    }
+
+    nrc_req_t req;
+    while((req = TAILQ_FIRST(&nrc->req_list))) {
+        TAILQ_REMOVE(&nrc->req_list, req, entries);
+        nrc_req_delete(req);
+    }
+}
+
 void nrc_delete(nrc_t nrc) {
     if(!nrc) {
         return;
@@ -529,15 +550,6 @@ void nrc_delete(nrc_t nrc) {
     }
     if(nrc->ip) {
         free(nrc->ip);
-    }
-    if(nrc->cur_req) {
-        nrc_req_delete(nrc->cur_req);
-    }
-
-    nrc_req_t req;
-    while((req = TAILQ_FIRST(&nrc->req_list))) {
-        TAILQ_REMOVE(&nrc->req_list, req, entries);
-        nrc_req_delete(req);
     }
 
     free(nrc);

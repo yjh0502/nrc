@@ -8,8 +8,8 @@
 #include "nacl.h"
 #include "nrc.h"
 
-const char * sk_client_hex = "b30f1ba99fceec8f3fec5645288a5529bcc27b2b4ee805ebf9ceee9e8681de68";
-const char * pk_server_hex = "2f1668ccee4d6b6207640d52be38103a147daf6ab8580e1c286d0a534fee5758";
+const char * sk_client_hex = "e30ecd8f566dade8d62f680dbf79bf46dbe3d4d2a2b692fcb3723286bac906c2";
+const char * pk_server_hex = "41b8271e9f8a1f27f5cdb57ba45dae7d9a58ef5104b57106cfc88f025d1d4b59";
 
 static int decode_hex(const char ch, unsigned char *out) {
     if(ch >= '0' && ch <= '9') {
@@ -53,8 +53,8 @@ static int init_key(void) {
     return 0;
 }
 
-const char *SERVER_HOST = "1.214.91.26";
-const int SERVER_PORT = 11003;
+const char *SERVER_HOST = "115.68.131.49";
+const int SERVER_PORT = 50002;
 
 static int i = 5;
 unsigned char *msg_str;
@@ -62,12 +62,17 @@ size_t msg_str_len;
 static void callback(int status, const unsigned char *jsonresp, int jsonresplen,
         const void *privdata) {
     nrc_t nrc = (nrc_t)privdata;
+    if(status != NRC_SUCCESS) {
+        printf("Failed to request: maybe server is down\n");
+        return;
+    }
+
     printf("%.*s\n", jsonresplen, jsonresp);
 
     if(i != 0) {
         if(nrc_request(nrc, msg_str, msg_str_len, callback, nrc)) {
-            printf("Failed to send request");
-            exit(-1);
+            printf("Failed to send request\n");
+            return;
         }
         --i;
     }
@@ -85,7 +90,7 @@ int main(void) {
     yajl_gen req = yajl_gen_alloc(NULL);
     yajl_gen_map_open(req);
     yajl_gen_string(req, (unsigned char *)"req", 3);
-    yajl_gen_string(req, (unsigned char *)"/v1/users_get", 13);
+    yajl_gen_string(req, (unsigned char *)"/v1/hello", 9);
     yajl_gen_map_close(req);
 
     yajl_gen_get_buf(req, &msg_str, &msg_str_len);
