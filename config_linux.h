@@ -14,7 +14,7 @@
 #define HAVE_EPOLL_CTL 1
 
 /* Define to 1 if you have the `eventfd' function. */
-#define HAVE_EVENTFD 1
+#define HAVE_EVENTFD 0
 
 /* Define to 1 if the floor function is available */
 #define HAVE_FLOOR 1
@@ -53,7 +53,7 @@
 #define HAVE_SELECT 1
 
 /* Define to 1 if you have the `signalfd' function. */
-#define HAVE_SIGNALFD 1
+#define HAVE_SIGNALFD 0
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #define HAVE_STDINT_H 1

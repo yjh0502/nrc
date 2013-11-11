@@ -8,7 +8,7 @@ SRCS:=nacl.c \
 
 OBJS=$(SRCS:.c=.o)
 
-CFLAGS=-Wall -O2 -g
+CFLAGS=-Wall -O2 -g -D__NRC_MAIN__
 CLIBS=-lm
 
 run: main
