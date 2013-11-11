@@ -221,8 +221,14 @@ static nrc_req_t nrc_req_new(unsigned char *buf, int buflen,
     }
     memset(req, 0, sizeof(struct nrc_req_s));
 
+    req->send_buf = malloc(buflen);
+    if(!req->send_buf) {
+        free(req);
+        return NULL;
+    }
+    memcpy(req->send_buf, buf, buflen);
+
     req->send_total = buflen;
-    req->send_buf = buf;
     req->cb = cb;
     req->privdata = privdata;
 
@@ -238,7 +244,7 @@ static void nrc_req_delete(nrc_req_t req) {
         req->cb(NRC_FAILED, NULL, 0, req->privdata);
     }
 
-    if(req->boxed && req->send_buf) {
+    if(req->send_buf) {
         free(req->send_buf);
     }
     if(req->recv_buf) {
