@@ -101,7 +101,9 @@ int main(void) {
         exit(-1);
     }
 
-    nrc_update(nrc);
+    while(i) {
+        nrc_update(nrc);
+    }
 
     yajl_gen_free(req);
     nrc_delete(nrc);

@@ -560,7 +560,7 @@ void nrc_delete(nrc_t nrc) {
 }
 
 void nrc_update(nrc_t nrc) {
-    ev_run(nrc->loop, 0);
+    ev_run(nrc->loop, EVRUN_NOWAIT);
 }
 
 int nrc_request(nrc_t nrc, unsigned char *jsonreq, int jsonreqlen,
