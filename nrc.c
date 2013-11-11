@@ -2,7 +2,11 @@
 
 #include "ev.h"
 #include "nacl.h"
+
+#define __MINIZ_C__
 #include "miniz.c"
+#undef __MINIZ_C__
+
 #define CHUNK_SIZE 4096
 
 #include <stdint.h>

@@ -1,3 +1,5 @@
+#ifdef __MINIZ_C__
+
 /* miniz.c v1.15 - public domain deflate/inflate, zlib-subset, ZIP reading/writing/appending, PNG writing
    See "unlicense" statement at the end of this file.
    Rich Geldreich <richgel99@gmail.com>, last updated Oct. 13, 2013
@@ -4914,3 +4916,5 @@ void *mz_zip_extract_archive_file_to_heap(const char *pZip_filename, const char 
 
   For more information, please refer to <http://unlicense.org/>
 */
+
+#endif
