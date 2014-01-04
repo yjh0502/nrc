@@ -214,6 +214,8 @@ struct nrc_req_s {
     char len_buf[4];
     unsigned char *send_buf, *recv_buf;
 
+    int retry_count;
+
     nrc_callback cb;
     const void* privdata;
 };
@@ -246,7 +248,11 @@ static nrc_req_t nrc_req_new(unsigned char *buf, int buflen,
 // changes as request goes (e.g. store received data, store
 // encryped data, ...), so nrc_req_t need to be cleaned up
 // before reused.
-static void nrc_req_cleanup(nrc_req_t req) {
+static int nrc_req_cleanup(nrc_req_t req) {
+    if(++req->retry_count >= 5) {
+        return -1;
+    }
+
     req->boxed = 0;
     req->callbacked = 0;
     if(req->send_buf) {
@@ -257,6 +263,8 @@ static void nrc_req_cleanup(nrc_req_t req) {
         free(req->recv_buf);
         req->recv_len_count = req->recv_count = req->recv_total = 0;
     }
+
+    return 0;
 }
 
 static void nrc_req_delete(nrc_req_t req) {
@@ -366,7 +374,7 @@ static int handle_read(nrc_t nrc) {
         readlen = read(nrc->fd, nrc->nonce + nrc->nonce_read_len,
             crypto_box_NONCEBYTES - nrc->nonce_read_len);
         printf("Read nonce: %d\n", readlen);
-        if(readlen < 0) {
+        if(readlen <= 0) {
             return -1;
         }
         nrc->nonce_read_len += readlen;
@@ -384,7 +392,7 @@ static int handle_read(nrc_t nrc) {
         if(req->recv_len_count < 4) {
             readlen = read(nrc->fd, req->len_buf, 4 - req->recv_len_count);
             printf("Read resp length: %d\n", readlen);
-            if(readlen < 0) {
+            if(readlen <= 0) {
                 return -1;
             }
 
@@ -445,7 +453,7 @@ static int handle_write(nrc_t nrc) {
         writelen = write(nrc->fd, len_buf + req->send_len_count,
             4 - req->send_len_count);
         printf("Write req length: %d\n", writelen);
-        if(writelen < 0) {
+        if(writelen <= 0) {
             return -1;
         }
         req->send_len_count += writelen;
@@ -456,7 +464,7 @@ static int handle_write(nrc_t nrc) {
         req->send_total - req->send_count);
     printf("Write req: %d\n", writelen);
 
-    if(writelen < 0) {
+    if(writelen <= 0) {
         return -1;
     }
     req->send_count += writelen;
@@ -472,22 +480,25 @@ static int nrc_ready(nrc_t nrc) {
 }
 
 static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
-    nrc_t nrc = get_parent(struct nrc_s, signal, watcher);
+}
 
-    if(events & EV_SIGNAL) {
-        printf("SIGPIPE\n");
-
-        // Enqueue pending request for retry
-        nrc_req_t req = nrc->cur_req;
-        if(req) {
-            printf("req: %p\n", nrc->cur_req);
-            nrc_req_cleanup(req);
+static void nrc_reconnect(nrc_t nrc) {
+    // Enqueue pending request for retry
+    nrc_req_t req = nrc->cur_req;
+    if(req) {
+        printf("req: %p\n", nrc->cur_req);
+        if(nrc_req_cleanup(req)) {
+            printf("Failed to retry pending request: retry count out %.*s\n",
+                req->req_len, req->req_buf);
+            nrc_req_delete(req);
+        } else {
             TAILQ_INSERT_HEAD(&nrc->req_list, req, entries);
         }
-
-        nrc_connect(nrc);
-        return;
     }
+    nrc->cur_req = NULL;
+
+    nrc_connect(nrc);
+    return;
 }
 
 static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
@@ -500,6 +511,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
         if(ev < 0) {
             printf("Error while reading: %s(%d)\n",
                 strerror(errno), errno);
+            nrc_reconnect(nrc);
             return;
         }
         nrc->status &= ~EV_READ;
@@ -511,6 +523,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
         if(ev < 0) {
             printf("Error while writing: %s(%d)\n",
                 strerror(errno), errno);
+            nrc_reconnect(nrc);
             return;
         }
 

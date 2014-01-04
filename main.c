@@ -66,7 +66,6 @@ static void callback(int status, const unsigned char *jsonresp, int jsonresplen,
     nrc_t nrc = (nrc_t)privdata;
     if(status != NRC_SUCCESS) {
         printf("Failed to request: maybe server is down\n");
-        return;
     }
 
     printf("%.*s\n", jsonresplen, jsonresp);
@@ -96,7 +95,7 @@ int main(void) {
     yajl_gen req = yajl_gen_alloc(NULL);
     yajl_gen_map_open(req);
     JSON_ADD(req, "req");
-    JSON_ADD(req, "/v1/user_get");
+    JSON_ADD(req, "exit_before_resp");
     yajl_gen_map_close(req);
 
     yajl_gen_get_buf(req, &msg_str, &msg_str_len);
