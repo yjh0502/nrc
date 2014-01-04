@@ -18,6 +18,7 @@ static void incr_nonce(unsigned char *nonce) {
     }
 }
 
+static int nrc_connect(nrc_t nrc);
 
 /** In-memory inflate/deflate implementation */
 typedef int (*zlib_op)(mz_streamp strm, int flush);
@@ -204,6 +205,10 @@ typedef struct nrc_req_s* nrc_req_t;
 struct nrc_req_s {
     TAILQ_ENTRY(nrc_req_s) entries;
     int boxed, callbacked;
+
+    unsigned char *req_buf;
+    int req_len;
+
     int send_len_count, send_count, send_total;
     int recv_len_count, recv_count, recv_total;
     char len_buf[4];
@@ -221,18 +226,37 @@ static nrc_req_t nrc_req_new(unsigned char *buf, int buflen,
     }
     memset(req, 0, sizeof(struct nrc_req_s));
 
-    req->send_buf = malloc(buflen);
-    if(!req->send_buf) {
+    req->req_buf = malloc(buflen);
+    if(!req->req_buf) {
         free(req);
         return NULL;
     }
-    memcpy(req->send_buf, buf, buflen);
+    memcpy(req->req_buf, buf, buflen);
 
-    req->send_total = buflen;
+    req->req_len = buflen;
     req->cb = cb;
     req->privdata = privdata;
 
     return req;
+}
+
+// Cleanup aborted request:
+// If there is an error while handling request, NRC
+// will automatically retry the request. nrc_req_t object
+// changes as request goes (e.g. store received data, store
+// encryped data, ...), so nrc_req_t need to be cleaned up
+// before reused.
+static void nrc_req_cleanup(nrc_req_t req) {
+    req->boxed = 0;
+    req->callbacked = 0;
+    if(req->send_buf) {
+        free(req->send_buf);
+        req->send_len_count = req->send_count = req->send_total = 0;
+    }
+    if(req->recv_buf) {
+        free(req->recv_buf);
+        req->recv_len_count = req->recv_count = req->recv_total = 0;
+    }
 }
 
 static void nrc_req_delete(nrc_req_t req) {
@@ -244,6 +268,9 @@ static void nrc_req_delete(nrc_req_t req) {
         req->cb(NRC_FAILED, NULL, 0, req->privdata);
     }
 
+    if(req->req_buf) {
+        free(req->req_buf);
+    }
     if(req->send_buf) {
         free(req->send_buf);
     }
@@ -256,6 +283,7 @@ static void nrc_req_delete(nrc_req_t req) {
 struct nrc_s {
     struct ev_loop * loop;
     struct ev_timer timer;
+    ev_signal signal;
     struct ev_io fdio;
 
     char *ip;
@@ -295,10 +323,10 @@ static int pop_req(nrc_t nrc) {
 
         unsigned char *boxed;
         uint32_t boxed_len;
-        if(pack_data(nrc->nonce, nrc->pk, nrc->sk, req->send_buf, req->send_total,
+        if(pack_data(nrc->nonce, nrc->pk, nrc->sk, req->req_buf, req->req_len,
                 &boxed, &boxed_len)) {
             printf("Failed to pack data\n");
-            return 0;
+            return -1;
         }
         incr_nonce(nrc->nonce);
         req->boxed = 1;
@@ -306,9 +334,9 @@ static int pop_req(nrc_t nrc) {
         req->send_total = boxed_len;
         nrc->cur_req = req;
 
-        return 1;
+        return 0;
     }
-    return 0;
+    return -1;
 }
 
 void dump_hex(const unsigned char *data, int len) {
@@ -345,9 +373,6 @@ static int handle_read(nrc_t nrc) {
 
         if(nrc->nonce_read_len == crypto_box_NONCEBYTES) {
             incr_nonce(nrc->nonce);
-            if(pop_req(nrc)) {
-                return EV_WRITE;
-            }
         }
         return 0;
     } else {
@@ -398,9 +423,7 @@ static int handle_read(nrc_t nrc) {
                 nrc_req_delete(req);
                 nrc->cur_req = NULL;
 
-                if(pop_req(nrc)) {
-                    return EV_WRITE;
-                }
+                return 0;
             }
 
             return 0;
@@ -422,7 +445,6 @@ static int handle_write(nrc_t nrc) {
         writelen = write(nrc->fd, len_buf + req->send_len_count,
             4 - req->send_len_count);
         printf("Write req length: %d\n", writelen);
-        dump_hex(len_buf, 4);
         if(writelen < 0) {
             return -1;
         }
@@ -449,17 +471,35 @@ static int nrc_ready(nrc_t nrc) {
     return nrc->nonce_read_len == crypto_box_NONCEBYTES;
 }
 
+static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
+    nrc_t nrc = get_parent(struct nrc_s, signal, watcher);
+
+    if(events & EV_SIGNAL) {
+        printf("SIGPIPE\n");
+
+        // Enqueue pending request for retry
+        nrc_req_t req = nrc->cur_req;
+        if(req) {
+            printf("req: %p\n", nrc->cur_req);
+            nrc_req_cleanup(req);
+            TAILQ_INSERT_HEAD(&nrc->req_list, req, entries);
+        }
+
+        nrc_connect(nrc);
+        return;
+    }
+}
+
 static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
     nrc_t nrc = get_parent(struct nrc_s, fdio, watcher);
-
     ev_io_stop(loop, watcher);
 
     int ev = 0;
     if(events & EV_READ) {
         ev = handle_read(nrc);
         if(ev < 0) {
-            printf("Error while reading: %d\n", errno);
-            nrc_stop(nrc);
+            printf("Error while reading: %s(%d)\n",
+                strerror(errno), errno);
             return;
         }
         nrc->status &= ~EV_READ;
@@ -469,8 +509,8 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     if(events & EV_WRITE) {
         ev = handle_write(nrc);
         if(ev < 0) {
-            printf("Error while writing: %d\n", errno);
-            nrc_stop(nrc);
+            printf("Error while writing: %s(%d)\n",
+                strerror(errno), errno);
             return;
         }
 
@@ -482,6 +522,55 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
         ev_io_set(watcher, nrc->fd, nrc->status);
         ev_io_start(nrc->loop, watcher);
     }
+}
+
+static int nrc_connect(nrc_t nrc) {
+    if(nrc->fd) {
+        ev_io_stop(nrc->loop, &nrc->fdio);
+        close(nrc->fd);
+        nrc->fd = 0;
+    }
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = PF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(nrc->ip);
+    server_addr.sin_port = htons(nrc->port);
+
+    if((nrc->fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+        printf("Failed to create socket\n");
+        goto failed;
+    }
+
+    int flags = fcntl(nrc->fd, F_GETFL);
+    flags |= O_NONBLOCK;
+
+    if(fcntl(nrc->fd, F_SETFL, flags) < 0) {
+        printf("Failed to set socket opt");
+        goto failed;
+    }
+    int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
+    if(err && errno != EINPROGRESS) {
+        printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
+        goto failed;
+    }
+
+    ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
+    ev_io_start(nrc->loop, &nrc->fdio);
+
+    nrc->nonce_len_read_len = nrc->nonce_read_len = 0;
+    nrc->cur_req = NULL;
+    nrc->status = EV_READ;
+
+    return 0;
+
+failed:
+    if(nrc->fd) {
+        close(nrc->fd);
+        nrc->fd = 0;
+    }
+    return -1;
 }
 
 nrc_t nrc_new(const char *ip, int port,
@@ -497,40 +586,18 @@ nrc_t nrc_new(const char *ip, int port,
     nrc->ip = strdup(ip);
     nrc->port = port;
     nrc->fd = -1;
-    nrc->status = EV_READ;
 
-    nrc->nonce_read_len = 0;
     memcpy(nrc->pk, pk, crypto_box_PUBLICKEYBYTES);
     memcpy(nrc->sk, sk, crypto_box_SECRETKEYBYTES);
 
     TAILQ_INIT(&nrc->req_list);
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-
-    server_addr.sin_family = PF_INET;
-    server_addr.sin_addr.s_addr = inet_addr(ip);
-    server_addr.sin_port = htons(port);
-
-    if((nrc->fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("Failed to create socket\n");
-        return NULL;
+    if(nrc_connect(nrc)) {
+        printf("Failed to connect\n");
     }
 
-    int flags = fcntl(nrc->fd, F_GETFL);
-    flags |= O_NONBLOCK;
-
-    if(fcntl(nrc->fd, F_SETFL, flags) < 0) {
-        printf("Failed to set socket opt");
-        return NULL;
-    }
-    int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
-    if(err && errno != EINPROGRESS) {
-        printf("Failed to connect: %d\n", errno);
-        return NULL;
-    }
-    ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
-    ev_io_start(nrc->loop, &nrc->fdio);
+    ev_signal_init(&nrc->signal, sig_handler, SIGPIPE);
+    ev_signal_start(nrc->loop, &nrc->signal);
 
     return nrc;
 }
@@ -542,6 +609,7 @@ void nrc_stop(nrc_t nrc) {
 
     if(nrc->cur_req) {
         nrc_req_delete(nrc->cur_req);
+        nrc->cur_req = NULL;
     }
 
     nrc_req_t req;
@@ -566,6 +634,18 @@ void nrc_delete(nrc_t nrc) {
 }
 
 void nrc_update(nrc_t nrc) {
+    if(nrc->status == 0 && nrc_ready(nrc)) {
+        // There is a pending request
+        if(!pop_req(nrc)) {
+            printf("pop req\n");
+            nrc->status |= EV_WRITE;
+
+            ev_io_stop(nrc->loop, &nrc->fdio);
+            ev_io_set(&nrc->fdio, nrc->fd, nrc->status);
+            ev_io_start(nrc->loop, &nrc->fdio);
+        }
+    }
+
     ev_run(nrc->loop, EVRUN_NOWAIT);
 }
 
@@ -576,15 +656,6 @@ int nrc_request(nrc_t nrc, unsigned char *jsonreq, int jsonreqlen,
         return -1;
     }
 
-    if(!nrc->cur_req && nrc_ready(nrc)) {
-        nrc->cur_req = req;
-        nrc->status |= EV_WRITE;
-
-        ev_io_stop(nrc->loop, &nrc->fdio);
-        ev_io_set(&nrc->fdio, nrc->fd, nrc->status);
-        ev_io_start(nrc->loop, &nrc->fdio);
-    } else {
-        TAILQ_INSERT_TAIL(&nrc->req_list, req, entries);
-    }
+    TAILQ_INSERT_TAIL(&nrc->req_list, req, entries);
     return 0;
 }

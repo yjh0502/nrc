@@ -55,13 +55,14 @@ static int init_key(void) {
 }
 
 const char *SERVER_HOST = "115.68.131.49";
-const int SERVER_PORT = 50002;
+const int SERVER_PORT = 11003;
 
-static int i = 5;
+static int recv = 5;
 unsigned char *msg_str;
 size_t msg_str_len;
 static void callback(int status, const unsigned char *jsonresp, int jsonresplen,
         const void *privdata) {
+    --recv;
     nrc_t nrc = (nrc_t)privdata;
     if(status != NRC_SUCCESS) {
         printf("Failed to request: maybe server is down\n");
@@ -70,14 +71,18 @@ static void callback(int status, const unsigned char *jsonresp, int jsonresplen,
 
     printf("%.*s\n", jsonresplen, jsonresp);
 
-    if(i != 0) {
+    if(recv > 0) {
         if(nrc_request(nrc, msg_str, msg_str_len, callback, nrc)) {
             printf("Failed to send request\n");
             return;
         }
-        --i;
     }
 }
+
+#define JSON_ADD(req, str) do { \
+    yajl_gen_string(req, \
+        (unsigned char *)str, \
+        strlen(str)); } while(0)
 
 int main(void) {
     if(init_key()) {
@@ -90,8 +95,8 @@ int main(void) {
 
     yajl_gen req = yajl_gen_alloc(NULL);
     yajl_gen_map_open(req);
-    yajl_gen_string(req, (unsigned char *)"req", 3);
-    yajl_gen_string(req, (unsigned char *)"/v1/hello", 9);
+    JSON_ADD(req, "req");
+    JSON_ADD(req, "/v1/user_get");
     yajl_gen_map_close(req);
 
     yajl_gen_get_buf(req, &msg_str, &msg_str_len);
@@ -101,7 +106,7 @@ int main(void) {
         exit(-1);
     }
 
-    while(i) {
+    while(recv) {
         nrc_update(nrc);
     }
 
