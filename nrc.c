@@ -9,6 +9,10 @@
 
 #define CHUNK_SIZE 4096
 
+#define NRC_TIMEOUT         (5.)
+#define NRC_RETRY_COUNT     (5)
+#define NRC_RECONNECT_COUNT (2)
+
 #include <stdint.h>
 
 static void incr_nonce(unsigned char *nonce) {
@@ -249,7 +253,7 @@ static nrc_req_t nrc_req_new(unsigned char *buf, int buflen,
 // encryped data, ...), so nrc_req_t need to be cleaned up
 // before reused.
 static int nrc_req_cleanup(nrc_req_t req) {
-    if(++req->retry_count >= 5) {
+    if(++req->retry_count >= NRC_RETRY_COUNT) {
         return -1;
     }
 
@@ -307,6 +311,8 @@ struct nrc_s {
     unsigned char pk[crypto_box_PUBLICKEYBYTES];
     unsigned char sk[crypto_box_SECRETKEYBYTES];
     unsigned char nonce[crypto_box_NONCEBYTES];
+
+    int reconnect_count;
 };
 
 #define get_parent(type, argname, arg) ((type *)((void*)(arg) - \
@@ -480,6 +486,14 @@ static int nrc_ready(nrc_t nrc) {
 }
 
 static void nrc_reconnect(nrc_t nrc) {
+    if(++nrc->reconnect_count >= NRC_RECONNECT_COUNT) {
+        printf("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
+
+        nrc->reconnect_count = 0;
+        ev_timer_again(nrc->loop, &nrc->timer);
+        return;
+    }
+
     // Enqueue pending request for retry
     nrc_req_t req = nrc->cur_req;
     if(req) {
@@ -505,6 +519,7 @@ static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events)
 static void timeout_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
     nrc_t nrc = get_parent(struct nrc_s, timer, watcher);
     printf("Timeout: try to reconnect\n");
+
     ev_timer_stop(nrc->loop, &nrc->timer);
     nrc_reconnect(nrc);
 }
@@ -522,6 +537,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
             nrc_reconnect(nrc);
             return;
         }
+
         nrc->status &= ~EV_READ;
         nrc->status |= ev;
     }
@@ -539,10 +555,13 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
         nrc->status |= ev;
     }
 
+    // nrc->status != 0 when if there is at least one
+    // sent/received packet. Reset reconnect timer
     if(nrc->status) {
         ev_io_set(watcher, nrc->fd, nrc->status);
         ev_io_start(nrc->loop, watcher);
 
+        nrc->reconnect_count = 0;
         ev_timer_again(nrc->loop, &nrc->timer);
     } else {
         ev_timer_stop(nrc->loop, &nrc->timer);
@@ -584,8 +603,10 @@ static int nrc_connect(nrc_t nrc) {
     ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
     ev_io_start(nrc->loop, &nrc->fdio);
 
-    ev_init(&nrc->timer, timeout_handler);
-    nrc->timer.repeat = 5.;
+    // Initial timeout: server should send nonce to client
+    // when connection established. If server does not respond
+    // client should try to re-connect.
+    ev_timer_again(nrc->loop, &nrc->timer);
 
     nrc->nonce_len_read_len = nrc->nonce_read_len = 0;
     nrc->cur_req = NULL;
@@ -623,6 +644,9 @@ nrc_t nrc_new(const char *ip, int port,
     if(nrc_connect(nrc)) {
         printf("Failed to connect\n");
     }
+
+    ev_init(&nrc->timer, timeout_handler);
+    nrc->timer.repeat = NRC_TIMEOUT;
 
     ev_signal_init(&nrc->signal, sig_handler, SIGPIPE);
     ev_signal_start(nrc->loop, &nrc->signal);
