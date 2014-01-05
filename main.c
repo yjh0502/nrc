@@ -95,7 +95,7 @@ int main(void) {
     yajl_gen req = yajl_gen_alloc(NULL);
     yajl_gen_map_open(req);
     JSON_ADD(req, "req");
-    JSON_ADD(req, "exit_before_resp");
+    JSON_ADD(req, "sleep_without_resp");
     yajl_gen_map_close(req);
 
     yajl_gen_get_buf(req, &msg_str, &msg_str_len);

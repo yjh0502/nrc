@@ -479,9 +479,6 @@ static int nrc_ready(nrc_t nrc) {
     return nrc->nonce_read_len == crypto_box_NONCEBYTES;
 }
 
-static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
-}
-
 static void nrc_reconnect(nrc_t nrc) {
     // Enqueue pending request for retry
     nrc_req_t req = nrc->cur_req;
@@ -499,6 +496,17 @@ static void nrc_reconnect(nrc_t nrc) {
 
     nrc_connect(nrc);
     return;
+}
+
+static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
+    // Handle SIGPIPE: Do nothing
+}
+
+static void timeout_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
+    nrc_t nrc = get_parent(struct nrc_s, timer, watcher);
+    printf("Timeout: try to reconnect\n");
+    ev_timer_stop(nrc->loop, &nrc->timer);
+    nrc_reconnect(nrc);
 }
 
 static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
@@ -534,6 +542,10 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     if(nrc->status) {
         ev_io_set(watcher, nrc->fd, nrc->status);
         ev_io_start(nrc->loop, watcher);
+
+        ev_timer_again(nrc->loop, &nrc->timer);
+    } else {
+        ev_timer_stop(nrc->loop, &nrc->timer);
     }
 }
 
@@ -571,6 +583,9 @@ static int nrc_connect(nrc_t nrc) {
 
     ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
     ev_io_start(nrc->loop, &nrc->fdio);
+
+    ev_init(&nrc->timer, timeout_handler);
+    nrc->timer.repeat = 5.;
 
     nrc->nonce_len_read_len = nrc->nonce_read_len = 0;
     nrc->cur_req = NULL;
