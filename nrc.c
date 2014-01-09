@@ -512,11 +512,11 @@ static void nrc_reconnect(nrc_t nrc) {
     return;
 }
 
-static void sig_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
+static void sig_handler(struct ev_loop *loop, struct ev_signal *watcher, int events) {
     // Handle SIGPIPE: Do nothing
 }
 
-static void timeout_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
+static void timeout_handler(struct ev_loop *loop, struct ev_timer *watcher, int events) {
     nrc_t nrc = get_parent(struct nrc_s, timer, watcher);
     printf("Timeout: try to reconnect\n");
 
@@ -645,10 +645,10 @@ nrc_t nrc_new(const char *ip, int port,
         printf("Failed to connect\n");
     }
 
-    ev_init(&nrc->timer, timeout_handler);
+    ev_init(&nrc->timer, &timeout_handler);
     nrc->timer.repeat = NRC_TIMEOUT;
 
-    ev_signal_init(&nrc->signal, sig_handler, SIGPIPE);
+    ev_signal_init(&nrc->signal, &sig_handler, SIGPIPE);
     ev_signal_start(nrc->loop, &nrc->signal);
 
     return nrc;
