@@ -318,7 +318,7 @@ struct nrc_s {
 #define get_parent(type, argname, arg) ((type *)((void*)(arg) - \
     ((size_t)(&((type*)0)->argname))))
 
-static int parse_int32_be(char *bytes) {
+static int parse_int32_be(unsigned char *bytes) {
     return (bytes[0] << 24) + (bytes[1] << 16) +
         (bytes[2] << 8) + bytes[3];
 }
