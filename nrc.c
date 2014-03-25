@@ -405,7 +405,7 @@ static int handle_read(nrc_t nrc) {
             req->recv_len_count += readlen;
         } else {
             if(!req->recv_total) {
-                req->recv_total = parse_int32_be(req->len_buf);
+                req->recv_total = parse_int32_be((unsigned char *)req->len_buf);
                 req->recv_buf = malloc(req->recv_total);
                 //TODO: handle failure
             }
@@ -648,6 +648,7 @@ nrc_t nrc_new(const char *ip, int port,
     ev_init(&nrc->timer, &timeout_handler);
     nrc->timer.repeat = NRC_TIMEOUT;
 
+    signal(SIGPIPE, SIG_IGN);
     ev_signal_init(&nrc->signal, &sig_handler, SIGPIPE);
     ev_signal_start(nrc->loop, &nrc->signal);
 
