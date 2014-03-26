@@ -14,6 +14,7 @@
 #define NRC_RECONNECT_COUNT (2)
 
 #include <stdint.h>
+#include <sys/socket.h>
 
 static void incr_nonce(unsigned char *nonce) {
     int i = 0;
@@ -599,6 +600,16 @@ static int nrc_connect(nrc_t nrc) {
         printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
         goto failed;
     }
+
+#ifdef __APPLE__
+    /**
+     * In iOS, signal() does not work on debug mode because
+     * debugger always break on signal while the signal does not
+     * exis the program, so add SO_NOSIGPIPE to socket.
+     */
+    int set = 1;
+    setsockopt(nrc->fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+#endif
 
     ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
     ev_io_start(nrc->loop, &nrc->fdio);
