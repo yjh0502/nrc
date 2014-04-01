@@ -630,6 +630,7 @@ failed:
         close(nrc->fd);
         nrc->fd = 0;
     }
+    ev_timer_again(nrc->loop, &nrc->timer);
     return -1;
 }
 
@@ -658,6 +659,7 @@ nrc_t nrc_new(const char *ip, int port,
 
     ev_init(&nrc->timer, &timeout_handler);
     nrc->timer.repeat = NRC_TIMEOUT;
+    ev_timer_start(nrc->loop, &nrc->timer);
 
     signal(SIGPIPE, SIG_IGN);
     ev_signal_init(&nrc->signal, &sig_handler, SIGPIPE);
