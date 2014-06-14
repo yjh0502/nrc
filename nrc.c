@@ -9,23 +9,12 @@
 
 #define CHUNK_SIZE 4096
 
-#define NRC_TIMEOUT         (2.)
+#define NRC_TIMEOUT         (5.)
 #define NRC_RETRY_COUNT     (5)
 #define NRC_RECONNECT_COUNT (2)
 
 #include <stdint.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-
-#ifdef DEBUG
-    #define debug(...) printf(__VA_ARGS__)
-#else
-    #define debug(...)
-#endif
 
 static void incr_nonce(unsigned char *nonce) {
     int i = 0;
@@ -36,7 +25,7 @@ static void incr_nonce(unsigned char *nonce) {
 
 static int nrc_connect(nrc_t nrc);
 
-/** In-memory inflate/deflate */
+/** In-memory inflate/deflate implementation */
 typedef int (*zlib_op)(mz_streamp strm, int flush);
 
 static int init_stream(z_stream *strm,
@@ -50,7 +39,7 @@ static int init_stream(z_stream *strm,
 }
 
 
-static int zlib_loop(z_stream *strm, zlib_op op_func, char **buf, int *buflen) {
+static int zlib_loop(z_stream *strm, zlib_op op_func, char **buf, size_t *buflen) {
     char *out = (char *)strm->next_out;
     int outlen = strm->avail_out;
 
@@ -88,7 +77,7 @@ err:
 }
 
 
-int inflate_data(const void *src, int srclen, char **dest_out, int *destlen_out) {
+int inflate_data(const void *src, size_t srclen, char **dest_out, size_t *destlen_out) {
     z_stream strm = {0};
     if(init_stream(&strm, src, srclen))
         return -1;
@@ -107,8 +96,9 @@ int inflate_data(const void *src, int srclen, char **dest_out, int *destlen_out)
     return 0;
 }
 
-int deflate_data(const void *src, int srclen,
-        char ** dest_out, int *destlen_out) {
+static int
+deflate_data(const void *src, size_t srclen,
+        char ** dest_out, size_t *destlen_out) {
     z_stream strm = {0};
     if(init_stream(&strm, src, srclen))
         return -1;
@@ -131,20 +121,20 @@ int deflate_data(const void *src, int srclen,
  * TODO: handle malloc failure
  * TODO: Eliminate Redundant memory copies
  */
-static int pack_data(const unsigned char *nonce,
+int pack_data(const unsigned char *nonce,
         const unsigned char *pk, const unsigned char *sk,
-        const unsigned char *data, int data_len,
-        unsigned char ** out, uint32_t *out_len) {
+        const unsigned char *data, size_t data_len,
+        unsigned char ** out, size_t *out_len) {
     // Deflate & box
-    int deflated_len;
+    size_t deflated_len;
     unsigned char *deflated;
     if(deflate_data(data, data_len, (char **)&deflated, &deflated_len)) {
         printf("Failed to deflate\n");
         return -1;
     }
-    debug("deflated: %d -> %d\n", data_len, deflated_len);
+    printf("deflated: %lu -> %lu\n", data_len, deflated_len);
 
-    int encrypted_len = deflated_len + crypto_box_ZEROBYTES;
+    size_t encrypted_len = deflated_len + crypto_box_ZEROBYTES;
     unsigned char *encrypted = malloc(encrypted_len);
 
     deflated = realloc(deflated, encrypted_len);
@@ -169,12 +159,12 @@ static int pack_data(const unsigned char *nonce,
     return 0;
 }
 
-static int unpack_data(const unsigned char *nonce,
+int unpack_data(const unsigned char *nonce,
         const unsigned char *pk, const unsigned char *sk,
-        const unsigned char *data, int data_len,
-        unsigned char ** out, int *out_len) {
+        const unsigned char *data, size_t data_len,
+        unsigned char ** out, size_t *out_len) {
     // box_oepn & inflate
-    int data_pad_len = data_len + crypto_box_BOXZEROBYTES;
+    size_t data_pad_len = data_len + crypto_box_BOXZEROBYTES;
     unsigned char *data_pad = malloc(data_pad_len);
     memset(data_pad, 0, crypto_box_BOXZEROBYTES);
     memcpy(data_pad + crypto_box_BOXZEROBYTES, data, data_len);
@@ -190,7 +180,7 @@ static int unpack_data(const unsigned char *nonce,
     }
     free(data_pad);
 
-    int inflated_len;
+    size_t inflated_len;
     unsigned char *inflated;
     if(inflate_data(decrypted + crypto_box_ZEROBYTES,
             data_pad_len - crypto_box_ZEROBYTES,
@@ -200,7 +190,7 @@ static int unpack_data(const unsigned char *nonce,
         return -1;
     }
     free(decrypted);
-    debug("inflated: %d -> %d\n", data_pad_len - crypto_box_ZEROBYTES, inflated_len);
+    printf("inflated: %ld -> %ld\n", data_pad_len - crypto_box_ZEROBYTES, inflated_len);
 
     *out = inflated;
     *out_len = inflated_len;
@@ -304,14 +294,6 @@ static void nrc_req_delete(nrc_req_t req) {
     free(req);
 }
 
-
-struct addr {
-    struct addr *a_next;
-    int a_family;
-    struct sockaddr_in a_ipv4;
-    struct sockaddr_in6 a_ipv6;
-};
-
 struct nrc_s {
     struct ev_loop * loop;
     struct ev_timer timer;
@@ -320,9 +302,6 @@ struct nrc_s {
 
     char *ip;
     int port;
-
-    struct addr *addr;
-    int addr_count, addr_idx;
 
     int fd;
     int status;
@@ -359,7 +338,7 @@ static int pop_req(nrc_t nrc) {
         TAILQ_REMOVE(&nrc->req_list, req, entries);
 
         unsigned char *boxed;
-        uint32_t boxed_len;
+        size_t boxed_len;
         if(pack_data(nrc->nonce, nrc->pk, nrc->sk, req->req_buf, req->req_len,
                 &boxed, &boxed_len)) {
             printf("Failed to pack data\n");
@@ -376,6 +355,15 @@ static int pop_req(nrc_t nrc) {
     return -1;
 }
 
+void dump_hex(const unsigned char *data, int len) {
+    int i;
+    for(i = 0; i < len; i++) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+
 // reutrns 1 if more data need to be read
 // returns 0 if done
 // returns -1 if error
@@ -389,10 +377,11 @@ static int handle_read(nrc_t nrc) {
         }
 
         nrc->nonce_len_read_len = 4;
+        dump_hex(nonce_len, 4);
     } else if(nrc->nonce_read_len < crypto_box_NONCEBYTES) {
         readlen = read(nrc->fd, nrc->nonce + nrc->nonce_read_len,
             crypto_box_NONCEBYTES - nrc->nonce_read_len);
-        debug("Read nonce: %d\n", readlen);
+        printf("Read nonce: %d\n", readlen);
         if(readlen <= 0) {
             return -1;
         }
@@ -410,7 +399,7 @@ static int handle_read(nrc_t nrc) {
 
         if(req->recv_len_count < 4) {
             readlen = read(nrc->fd, req->len_buf, 4 - req->recv_len_count);
-            debug("Read resp length: %d\n", readlen);
+            printf("Read resp length: %d\n", readlen);
             if(readlen <= 0) {
                 return -1;
             }
@@ -422,20 +411,20 @@ static int handle_read(nrc_t nrc) {
                 req->recv_buf = malloc(req->recv_total);
                 //TODO: handle failure
             }
-            debug("Total len: %d\n", req->recv_total);
+            printf("Total len: %d\n", req->recv_total);
 
             readlen = read(nrc->fd, req->recv_buf + req->recv_count,
                     req->recv_total - req->recv_count);
-            debug("Read resp body: %d\n", readlen);
+            printf("Read resp body: %d\n", readlen);
             if(readlen < 0) {
                 return -1;
             }
             req->recv_count += readlen;
 
             if(req->recv_count == req->recv_total) {
-                debug("Success: unpacking\n");
+                printf("Success: unpacking\n");
                 unsigned char *unboxed;
-                int unboxed_len;
+                size_t unboxed_len;
                 if(unpack_data(nrc->nonce, nrc->pk, nrc->sk, req->recv_buf, req->recv_total,
                         &unboxed, &unboxed_len)) {
                     printf("Failed to unpack data\n");
@@ -471,7 +460,7 @@ static int handle_write(nrc_t nrc) {
 
         writelen = write(nrc->fd, len_buf + req->send_len_count,
             4 - req->send_len_count);
-        debug("Write req length: %d\n", writelen);
+        printf("Write req length: %d\n", writelen);
         if(writelen <= 0) {
             return -1;
         }
@@ -481,7 +470,7 @@ static int handle_write(nrc_t nrc) {
 
     writelen = write(nrc->fd, req->send_buf + req->send_count,
         req->send_total - req->send_count);
-    debug("Write req: %d\n", writelen);
+    printf("Write req: %d\n", writelen);
 
     if(writelen <= 0) {
         return -1;
@@ -581,61 +570,19 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     }
 }
 
-static int init_addr(nrc_t nrc) {
-    struct addrinfo *out = NULL, *info;
-    if(getaddrinfo(nrc->ip, NULL, NULL, &out) != 0)
-        return NRC_FAILED;
-
-    int count = 0;
-    struct addr *addr = NULL, *cur = NULL, **next = &addr;
-
-    info = out;
-    while(info) {
-        if(!(info->ai_family & (AF_INET | AF_INET6)) ||
-                info->ai_socktype != SOCK_STREAM ||
-                info->ai_protocol != IPPROTO_TCP) {
-            info = info->ai_next;
-            continue;
-        }
-
-        cur = malloc(sizeof(struct addr));
-        cur->a_next = NULL;
-        cur->a_family = info->ai_family;
-        if(info->ai_family & AF_INET) {
-            cur->a_ipv4.sin_family = PF_INET;
-            cur->a_ipv4.sin_addr = ((struct sockaddr_in *)info->ai_addr)->sin_addr;
-            cur->a_ipv4.sin_port = htons(nrc->port);
-        } else {
-            cur->a_ipv6.sin6_family = PF_INET6;
-            cur->a_ipv6.sin6_addr = ((struct sockaddr_in6 *)info->ai_addr)->sin6_addr;
-            cur->a_ipv6.sin6_port = htons(nrc->port);
-        }
-
-        *next = cur;
-        next = &cur->a_next;
-        ++count;
-        info = info->ai_next;
-    }
-    freeaddrinfo(out);
-
-    if(!count) {
-        printf("No valid address for given domain name\n");
-        return NRC_FAILED;
-    }
-
-    nrc->addr = addr;
-    nrc->addr_count = count;
-    nrc->addr_idx = 0;
-
-    return NRC_SUCCESS;
-}
-
 static int nrc_connect(nrc_t nrc) {
     if(nrc->fd) {
         ev_io_stop(nrc->loop, &nrc->fdio);
         close(nrc->fd);
         nrc->fd = 0;
     }
+
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = PF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(nrc->ip);
+    server_addr.sin_port = htons(nrc->port);
 
     if((nrc->fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
         printf("Failed to create socket\n");
@@ -649,23 +596,7 @@ static int nrc_connect(nrc_t nrc) {
         printf("Failed to set socket opt");
         goto failed;
     }
-
-    // Simple DNS round-robin
-    int advance = nrc->addr_idx;
-    struct addr *addr = nrc->addr;
-    while(advance--)
-        addr = addr->a_next;
-
-    nrc->addr_idx = (nrc->addr_idx + 1) % nrc->addr_count;
-
-    struct sockaddr *sockaddr;
-    if(addr->a_family == AF_INET) {
-        sockaddr = (struct sockaddr *)&addr->a_ipv4;
-    } else {
-        sockaddr = (struct sockaddr *)&addr->a_ipv6;
-    }
-
-    int err = connect(nrc->fd, sockaddr, sizeof(struct sockaddr));
+    int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
     if(err && errno != EINPROGRESS) {
         printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
         goto failed;
@@ -700,26 +631,22 @@ failed:
         close(nrc->fd);
         nrc->fd = 0;
     }
-    ev_timer_again(nrc->loop, &nrc->timer);
     return -1;
 }
 
 nrc_t nrc_new(const char *ip, int port,
         const unsigned char *pk, const unsigned char *sk) {
     nrc_t nrc = malloc(sizeof(struct nrc_s));
-    if(!nrc)
+    if(!nrc) {
         return NULL;
+    }
     memset(nrc, 0, sizeof(struct nrc_s));
+
+    nrc->loop = ev_loop_new(0);
 
     nrc->ip = strdup(ip);
     nrc->port = port;
     nrc->fd = -1;
-    if(init_addr(nrc) != NRC_SUCCESS) {
-        printf("Failed to resolve address\n");
-        return NULL;
-    }
-
-    nrc->loop = ev_loop_new(0);
 
     memcpy(nrc->pk, pk, crypto_box_PUBLICKEYBYTES);
     memcpy(nrc->sk, sk, crypto_box_SECRETKEYBYTES);
@@ -730,9 +657,8 @@ nrc_t nrc_new(const char *ip, int port,
         printf("Failed to connect\n");
     }
 
-    ev_timer_init(&nrc->timer, &timeout_handler,
-        NRC_TIMEOUT, NRC_TIMEOUT);
-    ev_timer_start(nrc->loop, &nrc->timer);
+    ev_init(&nrc->timer, &timeout_handler);
+    nrc->timer.repeat = NRC_TIMEOUT;
 
     signal(SIGPIPE, SIG_IGN);
     ev_signal_init(&nrc->signal, &sig_handler, SIGPIPE);
@@ -768,12 +694,6 @@ void nrc_delete(nrc_t nrc) {
     if(nrc->ip) {
         free(nrc->ip);
     }
-    struct addr *addr = nrc->addr, *next;
-    while(addr) {
-        next = addr->a_next;
-        free(addr);
-        addr = next;
-    }
 
     free(nrc);
 }
@@ -782,7 +702,7 @@ void nrc_update(nrc_t nrc) {
     if(nrc->status == 0 && nrc_ready(nrc)) {
         // There is a pending request
         if(!pop_req(nrc)) {
-            debug("pop req\n");
+            printf("pop req\n");
             nrc->status |= EV_WRITE;
 
             ev_io_stop(nrc->loop, &nrc->fdio);

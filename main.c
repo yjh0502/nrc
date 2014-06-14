@@ -1,4 +1,4 @@
-#ifdef __NRC_MAIN__
+#ifdef __MAIN__
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,40 +9,10 @@
 #include "nacl.h"
 #include "nrc.h"
 
-const char * sk_client_hex = "e30ecd8f566dade8d62f680dbf79bf46dbe3d4d2a2b692fcb3723286bac906c2";
-const char * pk_server_hex = "41b8271e9f8a1f27f5cdb57ba45dae7d9a58ef5104b57106cfc88f025d1d4b59";
+const char * sk_client_hex = "0a9511481c1965c8cfcf2baa57ed3976e9d90e9404071660ab782bed23966868";
+const char * pk_server_hex = "242ddcd49f796d7e8f13a70e7e92661533df38847d2826792ae6f0810ead8b28";
 
-static int decode_hex(const char ch, unsigned char *out) {
-    if(ch >= '0' && ch <= '9') {
-        *out = (unsigned char)(ch - '0');
-    } else if(ch >= 'a' && ch <= 'f') {
-        *out = (unsigned char)(ch + 10 - 'a');
-    } else if(ch >= 'A' && ch <= 'F') {
-        *out = (unsigned char)(ch + 10 - 'A');
-    } else {
-        return -1;
-    }
-    return 0;
-}
-
-static int hex_to_bin(const char * hex, unsigned char * bin, int length) {
-    int i;
-    unsigned char ch_lower = 0, ch_upper = 0,
-        *hex_pos = (unsigned char *)hex - 1,
-        *bin_pos = bin - 1;
-
-    for(i = 0; i < length; i++) {
-        if(decode_hex(*(++hex_pos), &ch_upper) ||
-                decode_hex(*(++hex_pos), &ch_lower)) {
-            return -1;
-        }
-        *(++bin_pos) = (ch_upper << 4) + ch_lower;
-    }
-    return 0;
-}
-
-unsigned char sk[crypto_box_SECRETKEYBYTES];
-unsigned char pk[crypto_box_PUBLICKEYBYTES];
+#include "helper.h"
 
 static int init_key(void) {
     if(hex_to_bin(sk_client_hex, sk, crypto_box_SECRETKEYBYTES)) {

@@ -1,15 +1,26 @@
-SRCS:=nacl.c \
+SRCS=nacl.c \
 	yajl.c \
 	ev.c \
-	nrc.c \
-	main.c
+	nrc.c
 
+BINS=pack unpack main
 .PHONY: main
 
 OBJS=$(SRCS:.c=.o)
 
-CFLAGS=-Wall -g -D__NRC_MAIN__
+CFLAGS=-Wall -g -D__MAIN__
 CLIBS=-lm -lrt
+
+unpack: unpack.o $(OBJS)
+	cc $^ $(CLIBS) -o $@
+pack: pack.o $(OBJS)
+	cc $^ $(CLIBS) -o $@
+main: main.o $(OBJS)
+	cc $^ $(CLIBS) -o $@
+
+run: main
+
+run: main
 
 run: main
 	./main
@@ -17,11 +28,8 @@ run: main
 v: main
 	valgrind --leak-check=full --show-reachable=yes ./main
 
-main: $(OBJS) $(SRCS)
-	cc $(OBJS) $(CLIBS) -o main
-
 %.o: %.c
 	cc $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -r $(OBJS) main
+	rm -rf $(OBJS) main pack
