@@ -16,6 +16,12 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
+#ifdef DEBUG
+#define LOG(...) fLOG(stderr, __VA_ARGS__);
+#else
+#define LOG(...)
+#endif
+
 static void incr_nonce(unsigned char *nonce) {
     int i = 0;
     if(++nonce[i] || ++i != crypto_box_NONCEBYTES) {
@@ -129,10 +135,10 @@ int pack_data(const unsigned char *nonce,
     size_t deflated_len;
     unsigned char *deflated;
     if(deflate_data(data, data_len, (char **)&deflated, &deflated_len)) {
-        printf("Failed to deflate\n");
+        LOG("Failed to deflate\n");
         return -1;
     }
-    printf("deflated: %lu -> %lu\n", data_len, deflated_len);
+    LOG("deflated: %lu -> %lu\n", data_len, deflated_len);
 
     size_t encrypted_len = deflated_len + crypto_box_ZEROBYTES;
     unsigned char *encrypted = malloc(encrypted_len);
@@ -186,11 +192,11 @@ int unpack_data(const unsigned char *nonce,
             data_pad_len - crypto_box_ZEROBYTES,
             (char **)&inflated, &inflated_len)) {
         free(decrypted);
-        printf("Failed to inflate\n");
+        LOG("Failed to inflate\n");
         return -1;
     }
     free(decrypted);
-    printf("inflated: %ld -> %ld\n", data_pad_len - crypto_box_ZEROBYTES, inflated_len);
+    LOG("inflated: %ld -> %ld\n", data_pad_len - crypto_box_ZEROBYTES, inflated_len);
 
     *out = inflated;
     *out_len = inflated_len;
@@ -341,7 +347,7 @@ static int pop_req(nrc_t nrc) {
         size_t boxed_len;
         if(pack_data(nrc->nonce, nrc->pk, nrc->sk, req->req_buf, req->req_len,
                 &boxed, &boxed_len)) {
-            printf("Failed to pack data\n");
+            LOG("Failed to pack data\n");
             return -1;
         }
         incr_nonce(nrc->nonce);
@@ -358,9 +364,9 @@ static int pop_req(nrc_t nrc) {
 void dump_hex(const unsigned char *data, int len) {
     int i;
     for(i = 0; i < len; i++) {
-        printf("%02x", data[i]);
+        LOG("%02x", data[i]);
     }
-    printf("\n");
+    LOG("\n");
 }
 
 
@@ -381,7 +387,7 @@ static int handle_read(nrc_t nrc) {
     } else if(nrc->nonce_read_len < crypto_box_NONCEBYTES) {
         readlen = read(nrc->fd, nrc->nonce + nrc->nonce_read_len,
             crypto_box_NONCEBYTES - nrc->nonce_read_len);
-        printf("Read nonce: %d\n", readlen);
+        LOG("Read nonce: %d\n", readlen);
         if(readlen <= 0) {
             return -1;
         }
@@ -399,7 +405,7 @@ static int handle_read(nrc_t nrc) {
 
         if(req->recv_len_count < 4) {
             readlen = read(nrc->fd, req->len_buf, 4 - req->recv_len_count);
-            printf("Read resp length: %d\n", readlen);
+            LOG("Read resp length: %d\n", readlen);
             if(readlen <= 0) {
                 return -1;
             }
@@ -411,23 +417,23 @@ static int handle_read(nrc_t nrc) {
                 req->recv_buf = malloc(req->recv_total);
                 //TODO: handle failure
             }
-            printf("Total len: %d\n", req->recv_total);
+            LOG("Total len: %d\n", req->recv_total);
 
             readlen = read(nrc->fd, req->recv_buf + req->recv_count,
                     req->recv_total - req->recv_count);
-            printf("Read resp body: %d\n", readlen);
+            LOG("Read resp body: %d\n", readlen);
             if(readlen < 0) {
                 return -1;
             }
             req->recv_count += readlen;
 
             if(req->recv_count == req->recv_total) {
-                printf("Success: unpacking\n");
+                LOG("Success: unpacking\n");
                 unsigned char *unboxed;
                 size_t unboxed_len;
                 if(unpack_data(nrc->nonce, nrc->pk, nrc->sk, req->recv_buf, req->recv_total,
                         &unboxed, &unboxed_len)) {
-                    printf("Failed to unpack data\n");
+                    LOG("Failed to unpack data\n");
                     return -1;
                 }
                 incr_nonce(nrc->nonce);
@@ -460,7 +466,7 @@ static int handle_write(nrc_t nrc) {
 
         writelen = write(nrc->fd, len_buf + req->send_len_count,
             4 - req->send_len_count);
-        printf("Write req length: %d\n", writelen);
+        LOG("Write req length: %d\n", writelen);
         if(writelen <= 0) {
             return -1;
         }
@@ -470,7 +476,7 @@ static int handle_write(nrc_t nrc) {
 
     writelen = write(nrc->fd, req->send_buf + req->send_count,
         req->send_total - req->send_count);
-    printf("Write req: %d\n", writelen);
+    LOG("Write req: %d\n", writelen);
 
     if(writelen <= 0) {
         return -1;
@@ -489,7 +495,7 @@ static int nrc_ready(nrc_t nrc) {
 
 static void nrc_reconnect(nrc_t nrc) {
     if(++nrc->reconnect_count >= NRC_RECONNECT_COUNT) {
-        printf("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
+        LOG("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
 
         nrc->reconnect_count = 0;
         ev_timer_again(nrc->loop, &nrc->timer);
@@ -499,9 +505,9 @@ static void nrc_reconnect(nrc_t nrc) {
     // Enqueue pending request for retry
     nrc_req_t req = nrc->cur_req;
     if(req) {
-        printf("req: %p\n", nrc->cur_req);
+        LOG("req: %p\n", nrc->cur_req);
         if(nrc_req_cleanup(req)) {
-            printf("Failed to retry pending request: retry count out %.*s\n",
+            LOG("Failed to retry pending request: retry count out %.*s\n",
                 req->req_len, req->req_buf);
             nrc_req_delete(req);
         } else {
@@ -520,7 +526,7 @@ static void sig_handler(struct ev_loop *loop, struct ev_signal *watcher, int eve
 
 static void timeout_handler(struct ev_loop *loop, struct ev_timer *watcher, int events) {
     nrc_t nrc = get_parent(struct nrc_s, timer, watcher);
-    printf("Timeout: try to reconnect\n");
+    LOG("Timeout: try to reconnect\n");
 
     ev_timer_stop(nrc->loop, &nrc->timer);
     nrc_reconnect(nrc);
@@ -534,7 +540,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     if(events & EV_READ) {
         ev = handle_read(nrc);
         if(ev < 0) {
-            printf("Error while reading: %s(%d)\n",
+            LOG("Error while reading: %s(%d)\n",
                 strerror(errno), errno);
             nrc_reconnect(nrc);
             return;
@@ -547,7 +553,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     if(events & EV_WRITE) {
         ev = handle_write(nrc);
         if(ev < 0) {
-            printf("Error while writing: %s(%d)\n",
+            LOG("Error while writing: %s(%d)\n",
                 strerror(errno), errno);
             nrc_reconnect(nrc);
             return;
@@ -585,7 +591,7 @@ static int nrc_connect(nrc_t nrc) {
     server_addr.sin_port = htons(nrc->port);
 
     if((nrc->fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("Failed to create socket\n");
+        LOG("Failed to create socket\n");
         goto failed;
     }
 
@@ -593,12 +599,12 @@ static int nrc_connect(nrc_t nrc) {
     flags |= O_NONBLOCK;
 
     if(fcntl(nrc->fd, F_SETFL, flags) < 0) {
-        printf("Failed to set socket opt");
+        LOG("Failed to set socket opt");
         goto failed;
     }
     int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
     if(err && errno != EINPROGRESS) {
-        printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
+        LOG("Failed to connect: (%s)%d\n", strerror(errno), errno);
         goto failed;
     }
 
@@ -654,7 +660,7 @@ nrc_t nrc_new(const char *ip, int port,
     TAILQ_INIT(&nrc->req_list);
 
     if(nrc_connect(nrc)) {
-        printf("Failed to connect\n");
+        LOG("Failed to connect\n");
     }
 
     ev_init(&nrc->timer, &timeout_handler);
@@ -702,7 +708,7 @@ void nrc_update(nrc_t nrc) {
     if(nrc->status == 0 && nrc_ready(nrc)) {
         // There is a pending request
         if(!pop_req(nrc)) {
-            printf("pop req\n");
+            LOG("pop req\n");
             nrc->status |= EV_WRITE;
 
             ev_io_stop(nrc->loop, &nrc->fdio);

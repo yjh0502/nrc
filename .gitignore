@@ -1,3 +1,9 @@
 *.o
 *.sw[a-z]
 main
+pack
+unpack
+pk*
+sk*
+key.h
+nonce_prefix

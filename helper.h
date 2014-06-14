@@ -27,5 +27,34 @@ static int hex_to_bin(const char * hex, unsigned char * bin, int length) {
     return 0;
 }
 
+#define BLOCK_SIZE 1024
+
+#include <unistd.h>
+static int
+read_to_eof(int fd, unsigned char **out_data, size_t *out_size) {
+    size_t res = 0, len = 0, cap = BLOCK_SIZE;
+    unsigned char *buf = malloc(cap);
+    while(1) {
+        res = read(fd, buf + len, cap - len);
+
+        if(res < 0) {
+            free(buf);
+            return res;
+        }
+        if(res == 0)
+            break;
+
+        len += res;
+        if(len == cap) {
+            cap <<= 1;
+            buf = realloc(buf, cap);
+        }
+    }
+
+    *out_data = buf;
+    *out_size = len;
+    return 0;
+}
+
 unsigned char sk[crypto_box_SECRETKEYBYTES];
 unsigned char pk[crypto_box_PUBLICKEYBYTES];

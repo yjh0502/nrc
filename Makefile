@@ -15,8 +15,11 @@ unpack: unpack.o $(OBJS)
 	cc $^ $(CLIBS) -o $@
 pack: pack.o $(OBJS)
 	cc $^ $(CLIBS) -o $@
-main: main.o $(OBJS)
+main: main.o $(OBJS) key.h
 	cc $^ $(CLIBS) -o $@
+
+key.h: key.def.h
+	cp $< $@
 
 run: main
 
