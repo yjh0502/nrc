@@ -17,7 +17,7 @@
 #include <sys/socket.h>
 
 #ifdef DEBUG
-#define LOG(...) fLOG(stderr, __VA_ARGS__);
+#define LOG(...) fprintf(stderr, __VA_ARGS__);
 #else
 #define LOG(...)
 #endif
