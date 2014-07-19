@@ -10,8 +10,7 @@
 #define CHUNK_SIZE 4096
 
 #define NRC_TIMEOUT         (5.)
-#define NRC_RETRY_COUNT     (5)
-#define NRC_RECONNECT_COUNT (2)
+#define NRC_RECONNECT_COUNT (1)
 
 #include <stdint.h>
 #include <sys/socket.h>
@@ -261,10 +260,6 @@ static nrc_req_t nrc_req_new(unsigned char *buf, int buflen,
 // encryped data, ...), so nrc_req_t need to be cleaned up
 // before reused.
 static int nrc_req_cleanup(nrc_req_t req) {
-    if(++req->retry_count >= NRC_RETRY_COUNT) {
-        return -1;
-    }
-
     req->boxed = 0;
     req->callbacked = 0;
     if(req->send_buf) {
@@ -278,6 +273,7 @@ static int nrc_req_cleanup(nrc_req_t req) {
 
     return 0;
 }
+
 
 static void nrc_req_delete(nrc_req_t req) {
     if(!req) {
@@ -493,31 +489,33 @@ static int nrc_ready(nrc_t nrc) {
     return nrc->nonce_read_len == crypto_box_NONCEBYTES;
 }
 
+static void cleanup_req(nrc_t nrc) {
+    if(nrc->cur_req) {
+        nrc_req_delete(nrc->cur_req);
+        nrc->cur_req = NULL;
+    }
+
+    nrc_req_t req;
+    while((req = TAILQ_FIRST(&nrc->req_list))) {
+        TAILQ_REMOVE(&nrc->req_list, req, entries);
+        nrc_req_delete(req);
+    }
+}
+
 static void nrc_reconnect(nrc_t nrc) {
-    if(++nrc->reconnect_count >= NRC_RECONNECT_COUNT) {
+
+    if(++nrc->reconnect_count > NRC_RECONNECT_COUNT) {
         LOG("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
 
         nrc->reconnect_count = 0;
         ev_timer_again(nrc->loop, &nrc->timer);
-        return;
+        cleanup_req(nrc);
+    } else {
+        nrc_req_cleanup(nrc->cur_req);
+        TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
+        nrc->cur_req = NULL;
+        nrc_connect(nrc);
     }
-
-    // Enqueue pending request for retry
-    nrc_req_t req = nrc->cur_req;
-    if(req) {
-        LOG("req: %p\n", nrc->cur_req);
-        if(nrc_req_cleanup(req)) {
-            LOG("Failed to retry pending request: retry count out %.*s\n",
-                req->req_len, req->req_buf);
-            nrc_req_delete(req);
-        } else {
-            TAILQ_INSERT_HEAD(&nrc->req_list, req, entries);
-        }
-    }
-    nrc->cur_req = NULL;
-
-    nrc_connect(nrc);
-    return;
 }
 
 static void sig_handler(struct ev_loop *loop, struct ev_signal *watcher, int events) {
@@ -663,12 +661,14 @@ nrc_t nrc_new(const char *ip, int port,
         LOG("Failed to connect\n");
     }
 
-    ev_init(&nrc->timer, &timeout_handler);
-    nrc->timer.repeat = NRC_TIMEOUT;
+    ev_timer_init(&nrc->timer, &timeout_handler, NRC_TIMEOUT, NRC_TIMEOUT);
+    ev_timer_start(nrc->loop, &nrc->timer);
 
     signal(SIGPIPE, SIG_IGN);
     ev_signal_init(&nrc->signal, &sig_handler, SIGPIPE);
     ev_signal_start(nrc->loop, &nrc->signal);
+
+    LOG("nrc created\n");
 
     return nrc;
 }
@@ -678,16 +678,7 @@ void nrc_stop(nrc_t nrc) {
         ev_break(nrc->loop, EVBREAK_ALL);
     }
 
-    if(nrc->cur_req) {
-        nrc_req_delete(nrc->cur_req);
-        nrc->cur_req = NULL;
-    }
-
-    nrc_req_t req;
-    while((req = TAILQ_FIRST(&nrc->req_list))) {
-        TAILQ_REMOVE(&nrc->req_list, req, entries);
-        nrc_req_delete(req);
-    }
+    cleanup_req(nrc);
 }
 
 void nrc_delete(nrc_t nrc) {
@@ -705,16 +696,14 @@ void nrc_delete(nrc_t nrc) {
 }
 
 void nrc_update(nrc_t nrc) {
-    if(nrc->status == 0 && nrc_ready(nrc)) {
-        // There is a pending request
-        if(!pop_req(nrc)) {
-            LOG("pop req\n");
-            nrc->status |= EV_WRITE;
+    // There is a pending request
+    if(nrc->status == 0 && nrc_ready(nrc) && !pop_req(nrc)) {
+        LOG("pop req\n");
+        nrc->status |= EV_WRITE;
 
-            ev_io_stop(nrc->loop, &nrc->fdio);
-            ev_io_set(&nrc->fdio, nrc->fd, nrc->status);
-            ev_io_start(nrc->loop, &nrc->fdio);
-        }
+        ev_io_stop(nrc->loop, &nrc->fdio);
+        ev_io_set(&nrc->fdio, nrc->fd, nrc->status);
+        ev_io_start(nrc->loop, &nrc->fdio);
     }
 
     ev_run(nrc->loop, EVRUN_NOWAIT);

@@ -8,7 +8,7 @@ BINS=pack unpack main
 
 OBJS=$(SRCS:.c=.o)
 
-CFLAGS=-Wall -g -D__MAIN__
+CFLAGS=-Wall -g -D__MAIN__ -DDEBUG
 CLIBS=-lm -lrt
 
 unpack: unpack.o $(OBJS)
@@ -31,7 +31,7 @@ run: main
 v: main
 	valgrind --leak-check=full --show-reachable=yes ./main
 
-%.o: %.c
+%.o: %.c Makefile
 	cc $(CFLAGS) -c $< -o $@
 
 clean:

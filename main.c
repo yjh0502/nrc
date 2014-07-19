@@ -23,8 +23,8 @@ static int init_key(void) {
     return 0;
 }
 
-const char *SERVER_HOST = "115.68.131.49";
-const int SERVER_PORT = 11003;
+const char *SERVER_HOST = "127.0.0.1";
+const int SERVER_PORT = 11013;
 
 static int recv = 5;
 unsigned char *msg_str;
@@ -79,6 +79,7 @@ int main(void) {
 
     while(recv) {
         nrc_update(nrc);
+        usleep(10 * 1000);
     }
 
     yajl_gen_free(req);
