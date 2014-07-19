@@ -582,6 +582,10 @@ static int nrc_connect(nrc_t nrc) {
         close(nrc->fd);
         nrc->fd = 0;
     }
+    // Initial timeout: server should send nonce to client
+    // when connection established. If server does not respond
+    // client should try to re-connect.
+    ev_timer_again(nrc->loop, &nrc->timer);
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
@@ -602,6 +606,7 @@ static int nrc_connect(nrc_t nrc) {
         LOG("Failed to set socket opt");
         goto failed;
     }
+
     int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
     if(err && errno != EINPROGRESS) {
         LOG("Failed to connect: (%s)%d\n", strerror(errno), errno);
@@ -620,11 +625,6 @@ static int nrc_connect(nrc_t nrc) {
 
     ev_io_init(&nrc->fdio, io_handler, nrc->fd, EV_READ);
     ev_io_start(nrc->loop, &nrc->fdio);
-
-    // Initial timeout: server should send nonce to client
-    // when connection established. If server does not respond
-    // client should try to re-connect.
-    ev_timer_again(nrc->loop, &nrc->timer);
 
     nrc->nonce_len_read_len = nrc->nonce_read_len = 0;
     nrc->cur_req = NULL;
