@@ -511,9 +511,11 @@ static void nrc_reconnect(nrc_t nrc) {
         ev_timer_again(nrc->loop, &nrc->timer);
         cleanup_req(nrc);
     } else {
-        nrc_req_cleanup(nrc->cur_req);
-        TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
-        nrc->cur_req = NULL;
+        if(nrc->cur_req) {
+            nrc_req_cleanup(nrc->cur_req);
+            TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
+            nrc->cur_req = NULL;
+        }
         nrc_connect(nrc);
     }
 }
