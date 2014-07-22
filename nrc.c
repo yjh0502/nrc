@@ -503,7 +503,6 @@ static void cleanup_req(nrc_t nrc) {
 }
 
 static void nrc_reconnect(nrc_t nrc) {
-
     if(++nrc->reconnect_count > NRC_RECONNECT_COUNT) {
         LOG("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
 
@@ -512,8 +511,14 @@ static void nrc_reconnect(nrc_t nrc) {
         cleanup_req(nrc);
     } else {
         if(nrc->cur_req) {
-            nrc_req_cleanup(nrc->cur_req);
-            TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
+            // Request should be retried at least once to handle
+            // closed connection after idle time.
+            if(nrc->cur_req->retry_count++ > 0) {
+                nrc_req_delete(nrc->cur_req);
+            } else {
+                nrc_req_cleanup(nrc->cur_req);
+                TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
+            }
             nrc->cur_req = NULL;
         }
         nrc_connect(nrc);
