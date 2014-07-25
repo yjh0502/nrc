@@ -598,9 +598,18 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
 }
 
 static int init_addr(nrc_t nrc) {
+    int err = 0;
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(struct addrinfo));
+
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
     struct addrinfo *out = NULL, *info;
-    if(getaddrinfo(nrc->ip, NULL, NULL, &out) != 0)
+    if((err = getaddrinfo(nrc->ip, NULL, &hints, &out)) != 0) {
+        LOG("getaddrinfo: %s(%d)\n", gai_strerror(err), err);
         return NRC_FAILED;
+    }
 
     int count = 0;
     struct addr *addr = NULL, *cur = NULL, **next = &addr;
@@ -731,14 +740,16 @@ nrc_t nrc_new(const char *ip, int port,
     if(!nrc)
         return NULL;
     memset(nrc, 0, sizeof(struct nrc_s));
-    if(init_addr(nrc) != NRC_SUCCESS) {
-        LOG("Failed to resolve address\n");
-        return NULL;
-    }
 
     nrc->ip = strdup(ip);
     nrc->port = port;
     nrc->fd = -1;
+    if(init_addr(nrc) != NRC_SUCCESS) {
+        LOG("Failed to resolve address\n");
+        free(nrc->ip);
+        return NULL;
+    }
+
     nrc->loop = ev_loop_new(0);
 
     memcpy(nrc->pk, pk, crypto_box_PUBLICKEYBYTES);
