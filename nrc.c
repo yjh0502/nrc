@@ -14,6 +14,11 @@
 
 #include <stdint.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #ifdef DEBUG
 #define LOG(...) fprintf(stderr, __VA_ARGS__);
@@ -296,6 +301,14 @@ static void nrc_req_delete(nrc_req_t req) {
     free(req);
 }
 
+
+struct addr {
+    struct addr *a_next;
+    int a_family;
+    struct sockaddr_in a_ipv4;
+    struct sockaddr_in6 a_ipv6;
+};
+
 struct nrc_s {
     struct ev_loop * loop;
     struct ev_timer timer;
@@ -304,6 +317,9 @@ struct nrc_s {
 
     char *ip;
     int port;
+
+    struct addr *addr;
+    int addr_count, addr_idx;
 
     int fd;
     int status;
@@ -581,6 +597,55 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     }
 }
 
+static int init_addr(nrc_t nrc) {
+    struct addrinfo *out = NULL, *info;
+    if(getaddrinfo(nrc->ip, NULL, NULL, &out) != 0)
+        return NRC_FAILED;
+
+    int count = 0;
+    struct addr *addr = NULL, *cur = NULL, **next = &addr;
+
+    info = out;
+    while(info) {
+        if(!(info->ai_family & (AF_INET | AF_INET6)) ||
+                info->ai_socktype != SOCK_STREAM ||
+                info->ai_protocol != IPPROTO_TCP) {
+            info = info->ai_next;
+            continue;
+        }
+
+        cur = malloc(sizeof(struct addr));
+        cur->a_next = NULL;
+        cur->a_family = info->ai_family;
+        if(info->ai_family & AF_INET) {
+            cur->a_ipv4.sin_family = PF_INET;
+            cur->a_ipv4.sin_addr = ((struct sockaddr_in *)info->ai_addr)->sin_addr;
+            cur->a_ipv4.sin_port = htons(nrc->port);
+        } else {
+            cur->a_ipv6.sin6_family = PF_INET6;
+            cur->a_ipv6.sin6_addr = ((struct sockaddr_in6 *)info->ai_addr)->sin6_addr;
+            cur->a_ipv6.sin6_port = htons(nrc->port);
+        }
+
+        *next = cur;
+        next = &cur->a_next;
+        ++count;
+        info = info->ai_next;
+    }
+    freeaddrinfo(out);
+
+    if(!count) {
+        printf("No valid address for given domain name\n");
+        return NRC_FAILED;
+    }
+
+    nrc->addr = addr;
+    nrc->addr_count = count;
+    nrc->addr_idx = 0;
+
+    return NRC_SUCCESS;
+}
+
 static int nrc_connect(nrc_t nrc) {
     if(nrc->fd) {
         ev_io_stop(nrc->loop, &nrc->fdio);
@@ -608,13 +673,28 @@ static int nrc_connect(nrc_t nrc) {
     flags |= O_NONBLOCK;
 
     if(fcntl(nrc->fd, F_SETFL, flags) < 0) {
-        LOG("Failed to set socket opt");
+        printf("Failed to set socket opt");
         goto failed;
     }
 
-    int err = connect(nrc->fd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
+    // Simple DNS round-robin
+    int advance = nrc->addr_idx;
+    struct addr *addr = nrc->addr;
+    while(advance--)
+        addr = addr->a_next;
+
+    nrc->addr_idx = (nrc->addr_idx + 1) % nrc->addr_count;
+
+    struct sockaddr *sockaddr;
+    if(addr->a_family == AF_INET) {
+        sockaddr = (struct sockaddr *)&addr->a_ipv4;
+    } else {
+        sockaddr = (struct sockaddr *)&addr->a_ipv6;
+    }
+
+    int err = connect(nrc->fd, sockaddr, sizeof(struct sockaddr));
     if(err && errno != EINPROGRESS) {
-        LOG("Failed to connect: (%s)%d\n", strerror(errno), errno);
+        printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
         goto failed;
     }
 
@@ -648,16 +728,18 @@ failed:
 nrc_t nrc_new(const char *ip, int port,
         const unsigned char *pk, const unsigned char *sk) {
     nrc_t nrc = malloc(sizeof(struct nrc_s));
-    if(!nrc) {
+    if(!nrc)
+        return NULL;
+    memset(nrc, 0, sizeof(struct nrc_s));
+    if(init_addr(nrc) != NRC_SUCCESS) {
+        LOG("Failed to resolve address\n");
         return NULL;
     }
-    memset(nrc, 0, sizeof(struct nrc_s));
-
-    nrc->loop = ev_loop_new(0);
 
     nrc->ip = strdup(ip);
     nrc->port = port;
     nrc->fd = -1;
+    nrc->loop = ev_loop_new(0);
 
     memcpy(nrc->pk, pk, crypto_box_PUBLICKEYBYTES);
     memcpy(nrc->sk, sk, crypto_box_SECRETKEYBYTES);
