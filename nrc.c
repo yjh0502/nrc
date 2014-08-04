@@ -269,10 +269,12 @@ static int nrc_req_cleanup(nrc_req_t req) {
     req->callbacked = 0;
     if(req->send_buf) {
         free(req->send_buf);
+        req->send_buf = NULL;
         req->send_len_count = req->send_count = req->send_total = 0;
     }
     if(req->recv_buf) {
         free(req->recv_buf);
+        req->recv_buf = NULL;
         req->recv_len_count = req->recv_count = req->recv_total = 0;
     }
 
