@@ -9,7 +9,7 @@
 
 #define CHUNK_SIZE 4096
 
-#define NRC_TIMEOUT         (5.)
+#define NRC_TIMEOUT         (2.)
 #define NRC_RECONNECT_COUNT (1)
 
 #include <stdint.h>
@@ -539,7 +539,11 @@ static void nrc_reconnect(nrc_t nrc) {
             }
             nrc->cur_req = NULL;
         }
-        nrc_connect(nrc);
+
+        // Failed to reconnect, return error immediately
+        if(nrc_connect(nrc)) {
+            cleanup_req(nrc);
+        }
     }
 }
 
