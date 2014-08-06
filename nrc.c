@@ -9,8 +9,6 @@
 
 #define CHUNK_SIZE 4096
 
-#define NRC_TIMEOUT         (2.)
-
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -723,7 +721,7 @@ failed:
 }
 
 nrc_t nrc_new(const char *ip, int port,
-        const unsigned char *pk, const unsigned char *sk) {
+        const unsigned char *pk, const unsigned char *sk, float nrc_timeout) {
     nrc_t nrc = malloc(sizeof(struct nrc_s));
     if(!nrc)
         return NULL;
@@ -749,7 +747,7 @@ nrc_t nrc_new(const char *ip, int port,
         LOG("Failed to connect\n");
     }
 
-    ev_timer_init(&nrc->timer, &timeout_handler, NRC_TIMEOUT, NRC_TIMEOUT);
+    ev_timer_init(&nrc->timer, &timeout_handler, nrc_timeout, nrc_timeout);
     ev_timer_start(nrc->loop, &nrc->timer);
 
     signal(SIGPIPE, SIG_IGN);

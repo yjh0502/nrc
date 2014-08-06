@@ -9,7 +9,7 @@ typedef void (*nrc_callback)(int status, const unsigned char *jsonresp, int json
         const void *privdata);
 
 nrc_t nrc_new(const char *ip, int port,
-        const unsigned char *pk, const unsigned char *sk);
+        const unsigned char *pk, const unsigned char *sk, float nrc_timeout);
 void nrc_stop(nrc_t nrc);
 void nrc_delete(nrc_t nrc);
 
