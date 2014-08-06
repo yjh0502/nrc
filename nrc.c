@@ -10,7 +10,6 @@
 #define CHUNK_SIZE 4096
 
 #define NRC_TIMEOUT         (2.)
-#define NRC_RECONNECT_COUNT (1)
 
 #include <stdint.h>
 #include <sys/socket.h>
@@ -281,7 +280,6 @@ static int nrc_req_cleanup(nrc_req_t req) {
     return 0;
 }
 
-
 static void nrc_req_delete(nrc_req_t req) {
     if(!req) {
         return;
@@ -302,7 +300,6 @@ static void nrc_req_delete(nrc_req_t req) {
     }
     free(req);
 }
-
 
 struct addr {
     struct addr *a_next;
@@ -333,8 +330,6 @@ struct nrc_s {
     unsigned char pk[crypto_box_PUBLICKEYBYTES];
     unsigned char sk[crypto_box_SECRETKEYBYTES];
     unsigned char nonce[crypto_box_NONCEBYTES];
-
-    int reconnect_count;
 };
 
 #define get_parent(type, argname, arg) ((type *)((void*)(arg) - \
@@ -375,15 +370,6 @@ static int pop_req(nrc_t nrc) {
     return -1;
 }
 
-void dump_hex(const unsigned char *data, int len) {
-    int i;
-    for(i = 0; i < len; i++) {
-        LOG("%02x", data[i]);
-    }
-    LOG("\n");
-}
-
-
 // reutrns 1 if more data need to be read
 // returns 0 if done
 // returns -1 if error
@@ -397,7 +383,6 @@ static int handle_read(nrc_t nrc) {
         }
 
         nrc->nonce_len_read_len = 4;
-        dump_hex(nonce_len, 4);
     } else if(nrc->nonce_read_len < crypto_box_NONCEBYTES) {
         readlen = read(nrc->fd, nrc->nonce + nrc->nonce_read_len,
             crypto_box_NONCEBYTES - nrc->nonce_read_len);
@@ -507,6 +492,20 @@ static int nrc_ready(nrc_t nrc) {
     return nrc->nonce_read_len == crypto_box_NONCEBYTES;
 }
 
+static void socket_cleanup(nrc_t nrc) {
+    if(nrc->fd) {
+        ev_io_stop(nrc->loop, &nrc->fdio);
+        close(nrc->fd);
+        nrc->fd = 0;
+    }
+    if(nrc->cur_req) {
+        // If not specified, retry current request
+        nrc_req_cleanup(nrc->cur_req);
+        TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
+        nrc->cur_req = NULL;
+    }
+}
+
 static void cleanup_req(nrc_t nrc) {
     if(nrc->cur_req) {
         nrc_req_delete(nrc->cur_req);
@@ -514,37 +513,12 @@ static void cleanup_req(nrc_t nrc) {
     }
 
     nrc_req_t req;
+
     while((req = TAILQ_FIRST(&nrc->req_list))) {
         TAILQ_REMOVE(&nrc->req_list, req, entries);
         nrc_req_delete(req);
     }
-}
-
-static void nrc_reconnect(nrc_t nrc) {
-    if(++nrc->reconnect_count > NRC_RECONNECT_COUNT) {
-        LOG("Too many reconnect: sleeping: %d\n", nrc->reconnect_count);
-
-        nrc->reconnect_count = 0;
-        ev_timer_again(nrc->loop, &nrc->timer);
-        cleanup_req(nrc);
-    } else {
-        if(nrc->cur_req) {
-            // Request should be retried at least once to handle
-            // closed connection after idle time.
-            if(nrc->cur_req->retry_count++ > 0) {
-                nrc_req_delete(nrc->cur_req);
-            } else {
-                nrc_req_cleanup(nrc->cur_req);
-                TAILQ_INSERT_HEAD(&nrc->req_list, nrc->cur_req, entries);
-            }
-            nrc->cur_req = NULL;
-        }
-
-        // Failed to reconnect, return error immediately
-        if(nrc_connect(nrc)) {
-            cleanup_req(nrc);
-        }
-    }
+    socket_cleanup(nrc);
 }
 
 static void sig_handler(struct ev_loop *loop, struct ev_signal *watcher, int events) {
@@ -556,20 +530,31 @@ static void timeout_handler(struct ev_loop *loop, struct ev_timer *watcher, int 
     LOG("Timeout: try to reconnect\n");
 
     ev_timer_stop(nrc->loop, &nrc->timer);
-    nrc_reconnect(nrc);
+    cleanup_req(nrc);
 }
 
 static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) {
     nrc_t nrc = get_parent(struct nrc_s, fdio, watcher);
     ev_io_stop(loop, watcher);
 
+    // Either connection closed or server sent invalid message
+    if(!(nrc->status & EV_READ) && (events & EV_READ)) {
+        LOG("Connection closed, try to reconnect\n");
+        socket_cleanup(nrc);
+        if(!TAILQ_EMPTY(&nrc->req_list)) {
+            nrc_connect(nrc);
+        }
+        return;
+    }
+
     int ev = 0;
+    events &= nrc->status;
     if(events & EV_READ) {
         ev = handle_read(nrc);
         if(ev < 0) {
             LOG("Error while reading: %s(%d)\n",
                 strerror(errno), errno);
-            nrc_reconnect(nrc);
+            cleanup_req(nrc);
             return;
         }
 
@@ -582,7 +567,7 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
         if(ev < 0) {
             LOG("Error while writing: %s(%d)\n",
                 strerror(errno), errno);
-            nrc_reconnect(nrc);
+            cleanup_req(nrc);
             return;
         }
 
@@ -593,10 +578,9 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     // nrc->status != 0 when if there is at least one
     // sent/received packet. Reset reconnect timer
     if(nrc->status) {
-        ev_io_set(watcher, nrc->fd, nrc->status);
+        ev_io_set(watcher, nrc->fd, nrc->status | EV_READ);
         ev_io_start(nrc->loop, watcher);
 
-        nrc->reconnect_count = 0;
         ev_timer_again(nrc->loop, &nrc->timer);
     } else {
         ev_timer_stop(nrc->loop, &nrc->timer);
@@ -662,11 +646,9 @@ static int init_addr(nrc_t nrc) {
 }
 
 static int nrc_connect(nrc_t nrc) {
-    if(nrc->fd) {
-        ev_io_stop(nrc->loop, &nrc->fdio);
-        close(nrc->fd);
-        nrc->fd = 0;
-    }
+    LOG("nrc_connect()\n");
+    // Cleanup socket before create new one
+    socket_cleanup(nrc);
     // Initial timeout: server should send nonce to client
     // when connection established. If server does not respond
     // client should try to re-connect.
@@ -710,7 +692,7 @@ static int nrc_connect(nrc_t nrc) {
     int err = connect(nrc->fd, sockaddr, sizeof(struct sockaddr));
     if(err && errno != EINPROGRESS) {
         printf("Failed to connect: (%s)%d\n", strerror(errno), errno);
-        goto failed;
+        return 0;
     }
 
 #ifdef __APPLE__
@@ -801,12 +783,21 @@ void nrc_delete(nrc_t nrc) {
     free(nrc);
 }
 
+static int ensure_connected(nrc_t nrc) {
+    if(nrc->fd == 0 && !TAILQ_EMPTY(&nrc->req_list)) {
+        return nrc_connect(nrc);
+    }
+    return 0;
+}
+
 void nrc_update(nrc_t nrc) {
+    ensure_connected(nrc);
     // There is a pending request
     if(nrc->status == 0 && nrc_ready(nrc) && !pop_req(nrc)) {
         LOG("pop req\n");
         nrc->status |= EV_WRITE;
 
+        // Socket might be closed by server-side timeout
         ev_io_stop(nrc->loop, &nrc->fdio);
         ev_io_set(&nrc->fdio, nrc->fd, nrc->status);
         ev_io_start(nrc->loop, &nrc->fdio);

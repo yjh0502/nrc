@@ -26,7 +26,7 @@ static int init_key(void) {
 const char *SERVER_HOST = "127.0.0.1";
 const int SERVER_PORT = 11013;
 
-static int recv = 5;
+static int recv = 500;
 unsigned char *msg_str;
 size_t msg_str_len;
 static void callback(int status, const unsigned char *jsonresp, int jsonresplen,

@@ -22,10 +22,6 @@ key.h: key.def.h
 	cp $< $@
 
 run: main
-
-run: main
-
-run: main
 	./main
 
 v: main
