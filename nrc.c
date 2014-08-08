@@ -539,9 +539,6 @@ static void io_handler(struct ev_loop *loop, struct ev_io *watcher, int events) 
     if(!(nrc->status & EV_READ) && (events & EV_READ)) {
         LOG("Connection closed, try to reconnect\n");
         socket_cleanup(nrc);
-        if(!TAILQ_EMPTY(&nrc->req_list)) {
-            nrc_connect(nrc);
-        }
         return;
     }
 
