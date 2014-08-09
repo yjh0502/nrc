@@ -25,9 +25,10 @@
 
 static void incr_nonce(unsigned char *nonce) {
     int i = 0;
-    if(++nonce[i] || ++i != crypto_box_NONCEBYTES) {
-        return;
-    }
+    do {
+        if(++nonce[i])
+            break;
+    } while (++i != crypto_box_NONCEBYTES);
 }
 
 static int nrc_connect(nrc_t nrc);
