@@ -57,14 +57,14 @@ int main(void) {
         return -1;
     }
 
-    nrc_t nrc = nrc_new(SERVER_HOST, SERVER_PORT, pk, sk);
+    nrc_t nrc = nrc_new(SERVER_HOST, SERVER_PORT, pk, sk, 5);
     if(!nrc)
         return -1;
 
     yajl_gen req = yajl_gen_alloc(NULL);
     yajl_gen_map_open(req);
     JSON_ADD(req, "req");
-    JSON_ADD(req, "/v1/playlog_mylist");
+    JSON_ADD(req, "/v1/user_get");
 
     JSON_ADD(req, "id");
     JSON_ADD(req, "dqkxdnblrl");
