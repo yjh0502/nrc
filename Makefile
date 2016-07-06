@@ -9,7 +9,7 @@ BINS=pack unpack main
 OBJS=$(SRCS:.c=.o)
 
 CFLAGS=-Wall -g -D__MAIN__ -DDEBUG
-CLIBS=-lm -lrt
+CLIBS=-lm
 
 unpack: unpack.o $(OBJS)
 	cc $^ $(CLIBS) -o $@
